@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ipynb 转 PDF</title>
+  <meta name="description" content="把 Jupyter Notebook (.ipynb) 转成 PDF：中文不乱码、Markdown 全渲染、图片全保留，文件不离开浏览器。" />
+</head>
+
+<body>
+  <main class="app">
+    <header class="hero">
+      <h1>ipynb 转 PDF</h1>
+      <p class="slogan">中文不再变成 □□□</p>
+      <p class="sub">
+        拖入 <code>.ipynb</code> 文件，即时预览，一键导出 PDF。<br />
+        渲染全部在你的浏览器里完成，笔记本文件不会离开你的电脑。
+      </p>
+    </header>
+
+    <section id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="拖入或选择 ipynb 文件">
+      <input id="file-input" type="file" accept=".ipynb,application/json" hidden />
+      <div class="drop-inner">
+        <div class="drop-icon" aria-hidden="true"><i class="ph ph-notebook"></i></div>
+        <p class="drop-title">把 .ipynb 文件拖到这里</p>
+        <p class="drop-hint">或点击选择文件 · 也可以直接 <kbd>Ctrl+V</kbd> 粘贴</p>
+      </div>
+    </section>
+
+    <section id="loading" class="loading" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span id="loading-text">正在渲染预览…</span>
+    </section>
+
+    <!-- notebook 形状骨架屏 -->
+    <section id="skeleton" class="skeleton" aria-hidden="true" hidden>
+      <div class="sk-item sk-line title"></div>
+      <div class="sk-item sk-line w85"></div>
+      <div class="sk-item sk-line w70"></div>
+      <div class="sk-item sk-code"></div>
+      <div class="sk-item sk-line w100"></div>
+      <div class="sk-item sk-line w55"></div>
+      <div class="sk-item sk-img"></div>
+      <div class="sk-item sk-line w85"></div>
+      <div class="sk-item sk-line w70"></div>
+    </section>
+
+    <section id="preview-bar" class="preview-bar" hidden>
+      <div class="file-info">
+        <span id="file-name" class="file-name"></span>
+        <span id="file-stats" class="file-stats"></span>
+      </div>
+      <div class="actions">
+        <button id="convert-btn" class="btn btn-primary" type="button">
+          <i class="ph ph-file-pdf" aria-hidden="true"></i>转换为 PDF
+        </button>
+        <button id="example-btn" class="btn btn-ghost" type="button">
+          <i class="ph ph-play-circle" aria-hidden="true"></i>试试示例
+        </button>
+        <button id="reset-btn" class="btn btn-ghost" type="button">
+          <i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>换一个
+        </button>
+      </div>
+    </section>
+
+    <section id="convert-status" class="convert-status" hidden></section>
+
+    <section id="preview" class="preview" hidden>
+      <div id="notebook" class="notebook"></div>
+    </section>
+
+    <section id="unsupported" class="unsupported" hidden>
+      <i class="ph ph-warning-circle" aria-hidden="true"></i>
+      <span id="unsupported-text"></span>
+    </section>
+
+    <section class="details-section" id="faq">
+      <details>
+        <summary><i class="ph ph-check-circle" aria-hidden="true" style="color: var(--ok-text)"></i>支持什么内容？<i
+            class="ph ph-caret-right chev" aria-hidden="true"></i></summary>
+        <div class="details-body">
+          <ul class="ok-list">
+            <li>nbformat v3 / v4 笔记本（老 Anaconda 导出也能转）</li>
+            <li>GFM Markdown 全要素：标题、表格、列表、引用、删除线</li>
+            <li>笔记本内嵌 HTML：<code>&lt;font&gt;</code>、<code>&lt;center&gt;</code>、<code>&lt;style&gt;</code> 等原样生效</li>
+            <li>代码单元格：<code>In [n]:</code> 提示符 + 语法高亮（Jupyter 经典配色）</li>
+            <li>输出：stream 文本、HTML 表格、matplotlib 图片、错误堆栈</li>
+            <li>数学公式：<code>$…$</code> 行内与 <code>$$…$$</code> 块级（KaTeX）</li>
+            <li>图片：内嵌附件、base64 图、OSS/图床外链</li>
+            <li><code>&lt;!-- CELL_BREAK --&gt;</code> 标记自动转为分页符</li>
+          </ul>
+        </div>
+      </details>
+      <details>
+        <summary><i class="ph ph-x-circle" aria-hidden="true" style="color: var(--err-text)"></i>不支持什么？<i
+            class="ph ph-caret-right chev" aria-hidden="true"></i></summary>
+        <div class="details-body">
+          <ul class="no-list">
+            <li>交互式 widget（ipywidgets）：静态 PDF 无法承载，自动跳过并提示数量</li>
+            <li>JavaScript 交互输出、iframe 嵌入内容</li>
+            <li>需要联网执行的代码（转换不运行任何代码，只渲染已保存的输出）</li>
+          </ul>
+        </div>
+      </details>
+      <details>
+        <summary><i class="ph ph-lock-key" aria-hidden="true" style="color: var(--accent)"></i>文件会被上传吗？<i
+            class="ph ph-caret-right chev" aria-hidden="true"></i></summary>
+        <div class="details-body">
+          <p style="margin: 6px 0;">不会。解析与渲染全部在你的浏览器里完成，<b>.ipynb 文件不离开你的电脑</b>。</p>
+          <p style="margin: 6px 0;">「转换为 PDF」默认尝试云端导出（走你自己部署的 Cloudflare Worker），发送的也只是渲染完成的 HTML
+            文本；云端不可用时自动回退为浏览器打印导出，你可以在打印对话框里选「另存为 PDF」。</p>
+        </div>
+      </details>
+      <details>
+        <summary><i class="ph ph-question" aria-hidden="true" style="color: var(--text-3)"></i>导出的 PDF 怎么调纸张和边距？<i
+            class="ph ph-caret-right chev" aria-hidden="true"></i></summary>
+        <div class="details-body">
+          <p style="margin: 6px 0;">云端导出固定为 Letter 纸张、2cm 边距、页脚页码。使用浏览器打印导出时，在打印对话框里可以自选纸张、边距，并建议勾选「背景图形」以保留代码块灰底。</p>
+        </div>
+      </details>
+    </section>
+
+    <footer class="foot">
+      <p>开源项目（<a href="https://github.com/WeatherCore/ipynb-to-pdf" target="_blank" rel="noopener">GitHub</a>，MIT
+        License）。渲染在本地浏览器完成，云端导出走你自己的 Cloudflare 额度。</p>
+    </footer>
+  </main>
+
+  <div id="window-drop-overlay" class="window-drop-overlay" hidden>
+    <div class="overlay-card">
+      <i class="ph ph-download-simple" aria-hidden="true"></i>
+      松手即预览
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>
