@@ -251,7 +251,7 @@ ipynb-to-pdf/
 ## 🤝 参与贡献
 
 欢迎 Issue 与 PR：Fork → 新建分支 → 提交改动 → 发起 Pull Request。
-改动渲染逻辑时，可用仓库根目录的样例笔记本（`大模型在线API接入基础入门实战.ipynb`）与 `?example=1` 内置示例做对照验证。
+改动渲染逻辑时，可用 `?example=1` 内置示例做对照验证；本地若另备 `.ipynb` 课件，直接拖入页面即可用真实文件对照。
 
 <div align="center">
 
