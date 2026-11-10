@@ -17,6 +17,7 @@ const PDF_OPTIONS = {
     format: 'letter' as const,
     printBackground: true,
     preferCSSPageSize: true,
+    outline: true,              // PDF 书签大纲（侧边栏导航），由 h1/h2/h3 层级生成
     displayHeaderFooter: true,
     footerTemplate:
       `<div style="width:100%;font-size:9px;color:#888;text-align:center;` +
