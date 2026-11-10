@@ -82,10 +82,32 @@ function highlightCode(code: string, lang: string): string {
 /** CELL_BREAK → 分页 div；同时去掉该注释避免原样显示 */
 const PAGE_BREAK_DIV = '\n\n<div class="page-break"></div>\n\n';
 
-/** markdown 源里的 CELL_BREAK 注释替换为分页 div（html:true 直通渲染） */
-function injectPageBreaks(src: string): { html: string; breaks: number } {
+/** 纯标题 cell：整个 cell 只含标题（h1-h6），无其他可见内容 */
+function isHeadingOnlyCell(source: string): boolean {
+  const stripped = source
+    .replace(CELL_BREAK_RE, '')      // 分页标记不算内容
+    .replace(/<!--[\s\S]*?-->/g, '') // 其他 HTML 注释不算
+    .replace(/^\s*#{1,6}\s+.*$/gm, '') // ATX 标题行
+    .replace(/<h[1-6][\s\S]*?<\/h[1-6]>/gi, '') // HTML 标题标签
+    .trim();
+  return stripped.length === 0;
+}
+
+/**
+ * 智能合并分页：cell 以 CELL_BREAK 开头，而上一 cell 是纯标题时，
+ * 分页符会造出「标题独占一页」的孤页（标题后无正文可跟）。
+ * 此时降级为普通标题间距。其余 15 处 CELL_BREAK 语义不变。
+ */
+const PAGE_BREAK_SUPPRESSED = '\n\n<!-- page-break suppressed: heading-only predecessor -->\n\n';
+
+function injectPageBreaks(src: string, suppress: boolean): { html: string; breaks: number; suppressed: number } {
   const matches = src.match(CELL_BREAK_RE);
-  return { html: src.replace(CELL_BREAK_RE, PAGE_BREAK_DIV), breaks: matches ? matches.length : 0 };
+  const replacement = suppress ? PAGE_BREAK_SUPPRESSED : PAGE_BREAK_DIV;
+  return {
+    html: src.replace(CELL_BREAK_RE, replacement),
+    breaks: matches ? matches.length : 0,
+    suppressed: suppress && matches ? matches.length : 0,
+  };
 }
 
 export interface RenderResult {
@@ -102,6 +124,8 @@ export interface RenderResult {
     widgets: number;
     externalImages: number;
     embeddedImages: number;
+    /** PDF 侧边栏书签条数（h1/h2/h3 总数，outline 由打印引擎生成） */
+    outlineEntries: number;
   };
 }
 
@@ -109,30 +133,38 @@ export function renderNotebook(doc: NotebookDoc): RenderResult {
   const stats: RenderResult['stats'] = {
     cells: doc.cells.length, markdown: 0, code: 0, outputs: 0,
     pageBreaks: 0, images: 0, widgets: doc.widgetCount,
-    externalImages: 0, embeddedImages: 0,
+    externalImages: 0, embeddedImages: 0, outlineEntries: 0,
   };
 
   const chunks: string[] = [];
+  /** 上一 cell 是否为纯标题（决定当前 cell 开头的 CELL_BREAK 是否降级） */
+  let prevWasHeadingOnly = false;
 
   for (const cell of doc.cells) {
     if (cell.type === 'markdown') {
       stats.markdown++;
-      const injected = injectPageBreaks(cell.source);
-      stats.pageBreaks += injected.breaks;
+      const suppress = prevWasHeadingOnly;
+      const injected = injectPageBreaks(cell.source, suppress);
+      stats.pageBreaks += injected.breaks - injected.suppressed;
       const seg = renderMarkdown(injected.html, cell.attachments);
       // CELL_BREAK 在 cell 开头时渲染结果以分页 div 起头；纯空白且无分页的才跳过
-      if (seg.replace(PAGE_BREAK_DIV, '').trim() === '' && injected.breaks === 0) continue;
+      const stripped = seg.replace(PAGE_BREAK_SUPPRESSED, '').replace(PAGE_BREAK_DIV, '').trim();
+      if (stripped === '' && injected.breaks === 0) continue;
       chunks.push(`<div class="cell cell-markdown">${seg}</div>`);
+      prevWasHeadingOnly = isHeadingOnlyCell(cell.source);
       continue;
     }
 
     if (cell.type === 'raw') {
       // nbconvert 默认行为：raw cell 原样作为 HTML 透传（可能含分页标记）
-      const injected = injectPageBreaks(cell.source);
-      stats.pageBreaks += injected.breaks;
+      const suppress = prevWasHeadingOnly;
+      const injected = injectPageBreaks(cell.source, suppress);
+      stats.pageBreaks += injected.breaks - injected.suppressed;
       const seg = sanitize(injected.html);
-      if (seg.replace(PAGE_BREAK_DIV, '').trim() === '' && injected.breaks === 0) continue;
+      const stripped = seg.replace(PAGE_BREAK_SUPPRESSED, '').replace(PAGE_BREAK_DIV, '').trim();
+      if (stripped === '' && injected.breaks === 0) continue;
       chunks.push(`<div class="cell cell-raw">${seg}</div>`);
+      prevWasHeadingOnly = isHeadingOnlyCell(cell.source);
       continue;
     }
 
@@ -179,14 +211,64 @@ export function renderNotebook(doc: NotebookDoc): RenderResult {
       (outHtml ? `<div class="code-output">${outHtml}</div>` : ``) +
       `</div>`,
     );
+    // 代码 cell 不是纯标题：其后即使紧跟 CELL_BREAK 也正常分页
+    prevWasHeadingOnly = false;
   }
 
-  // 统计外链图数量（验收项 3）
+  // 统计外链图数量（验收项 3）+ 书签条数（PDF outline 由 h1-h3 自动生成）
   const joined = chunks.join('');
   stats.externalImages = (joined.match(/<img [^>]*src="https?:\/\//g) ?? []).length;
   stats.images += stats.externalImages;
+  stats.outlineEntries = (joined.match(/<h[123][\s>]/gi) ?? []).length;
 
   return { html: joined, stats };
+}
+
+export interface HeadingRef {
+  level: 1 | 2 | 3;
+  id: string;
+  text: string;
+}
+
+/** 给 h1-h3 补 id；返回带 id 的 HTML 与标题清单（按文档顺序） */
+function addHeadingIds(html: string): { html: string; headings: HeadingRef[] } {
+  const headings: HeadingRef[] = [];
+  let n = 0;
+  const out = html.replace(/<h([1-3])(\s[^>]*)?>([\s\S]*?)<\/h\1>/gi, (m, lvl, attrs, inner) => {
+    const level = Number(lvl) as 1 | 2 | 3;
+    const text = inner.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    if (!text) return m;
+    const id = `nb-h-${++n}`;
+    headings.push({ level, id, text });
+    const keptAttrs = attrs ?? '';
+    if (/\sid\s*=/i.test(keptAttrs)) return m; // 已有 id 的标题不动（内嵌 HTML 可能自带）
+    return `<h${lvl}${keptAttrs} id="${id}">${inner}</h${lvl}>`;
+  });
+  return { html: out, headings };
+}
+
+/** 由标题清单生成目录 HTML：h3 默认折叠在 details 里，避免长目录淹没人 */
+function buildToc(headings: HeadingRef[]): { html: string; entries: number } {
+  if (headings.length === 0) return { html: '', entries: 0 };
+  const top = headings.filter((h) => h.level <= 2);
+  const sub = headings.filter((h) => h.level === 3);
+  const item = (h: HeadingRef) =>
+    `<a class="toc-lv${h.level}" href="#${h.id}">${esc(h.text)}</a>`;
+
+  let body = '';
+  if (top.length > 0) {
+    body += `<nav class="toc">${top.map(item).join('\n')}</nav>`;
+  }
+  if (sub.length > 0) {
+    body +=
+      `<details class="toc-sub"><summary>展开 ${sub.length} 个小节（h3）</summary>` +
+      `<nav class="toc">${sub.map(item).join('\n')}</nav></details>`;
+  }
+  const html =
+    `<section class="toc-page" id="nb-toc">` +
+    `<h1 class="toc-title">目录</h1>${body}</section>` +
+    `<div class="page-break"></div>`;
+  return { html, entries: headings.length };
 }
 
 /** 导出/云端发送用的完整文档：Jupyter 原味样式 + US Letter 打印参数 */
@@ -215,7 +297,7 @@ export const PRINT_CSS = `
 * { box-sizing: border-box; }
 html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body {
-  margin: 0; color: #222; font-size: 10.5pt; line-height: 1.75;
+  margin: 0; color: #222; font-size: 10.5pt; line-height: 1.85;
   font-family: -apple-system, "Segoe UI", "Helvetica Neue", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
   word-wrap: break-word;
@@ -228,11 +310,18 @@ body {
 .cell-markdown > :last-child { margin-bottom: 0; }
 .cell-markdown h1, .cell-markdown h2, .cell-markdown h3,
 .cell-markdown h4, .cell-markdown h5, .cell-markdown h6 {
-  margin: 0.9em 0 0.45em; line-height: 1.35; font-weight: 700; break-after: avoid;
+  margin: 1.1em 0 0.5em; line-height: 1.35; font-weight: 700; break-after: avoid;
 }
-.cell-markdown h1 { font-size: 1.9em; border-bottom: 2px solid #e0e0e0; padding-bottom: .25em; }
-.cell-markdown h2 { font-size: 1.5em; border-bottom: 1px solid #e8e8e8; padding-bottom: .2em; }
-.cell-markdown h3 { font-size: 1.22em; }
+/* 标题样式（用户裁决：完全照抄参考成功版——纯文字，无边框/竖条/横线/前缀符号，
+   层级只靠字号与字重区分。页码页脚保留，是对参考版唯一的主动超越） */
+.cell-markdown h1 {
+  font-size: 2em; text-align: center;
+}
+.cell-markdown h2 { font-size: 1.55em; }
+.cell-markdown h3 { font-size: 1.3em; }
+.cell-markdown h4 { font-size: 1.12em; }
+.cell-markdown h5 { font-size: 1.02em; }
+.cell-markdown h6 { font-size: .95em; color: #5c6470; }
 .cell-markdown p { margin: .5em 0; }
 .cell-markdown ul, .cell-markdown ol { margin: .4em 0; padding-left: 2em; }
 .cell-markdown li { margin: .18em 0; }
@@ -243,7 +332,7 @@ body {
 .cell-markdown a { color: #106ba3; text-decoration: none; }
 .cell-markdown code {
   font-family: "JetBrains Mono", Consolas, "Courier New", "PingFang SC", "Microsoft YaHei", monospace;
-  font-size: .88em; background: #f5f5f5; border: 1px solid #e6e6e6;
+  font-size: .88em; background: #f5f5f5;
   border-radius: 3px; padding: .08em .35em;
 }
 
@@ -325,4 +414,6 @@ body {
   .output-image, .output-html table { break-inside: avoid; }
   h1, h2, h3 { break-after: avoid; }
 }
+
+/* 页码占位样式已随目录页方案一起移除（用户裁决：正文不插目录页） */
 `;
