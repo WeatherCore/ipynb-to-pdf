@@ -11,8 +11,9 @@
 <body>
   <main class="app">
     <header class="hero">
-      <h1>ipynb 转 PDF</h1>
-      <p class="slogan">中文不再变成 □□□</p>
+      <div class="brand-mark" aria-hidden="true"><i class="ph ph-notebook"></i></div>
+      <h1>ipynb <span class="arrow" aria-hidden="true">&#8594;</span> PDF</h1>
+      <p class="slogan">中文不再变成 <span class="tofu">&#9633;&#9633;</span></p>
       <p class="sub">
         拖入 <code>.ipynb</code> 文件，即时预览，一键导出 PDF。<br />
         渲染全部在你的浏览器里完成，笔记本文件不会离开你的电脑。
@@ -24,9 +25,11 @@
       <div class="drop-inner">
         <div class="drop-icon" aria-hidden="true"><i class="ph ph-notebook"></i></div>
         <p class="drop-title">把 .ipynb 文件拖到这里</p>
-        <p class="drop-hint">或点击选择文件 · 也可以直接 <kbd>Ctrl+V</kbd> 粘贴</p>
+        <p class="drop-hint">或点击选择文件，也可以直接 <kbd>Ctrl+V</kbd> 粘贴</p>
       </div>
     </section>
+
+    <p class="drop-meta">支持 Markdown 全要素、代码高亮、KaTeX 公式、内嵌图片，导出 PDF 带书签大纲与页码</p>
 
     <section id="loading" class="loading" hidden>
       <span class="spinner" aria-hidden="true"></span>
@@ -52,14 +55,14 @@
         <span id="file-stats" class="file-stats"></span>
       </div>
       <div class="actions">
-        <button id="convert-btn" class="btn btn-primary" type="button">
-          <i class="ph ph-file-pdf" aria-hidden="true"></i>转换为 PDF
-        </button>
         <button id="example-btn" class="btn btn-ghost" type="button">
           <i class="ph ph-play-circle" aria-hidden="true"></i>试试示例
         </button>
         <button id="reset-btn" class="btn btn-ghost" type="button">
           <i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>换一个
+        </button>
+        <button id="convert-btn" class="btn btn-primary" type="button">
+          <i class="ph ph-file-pdf" aria-hidden="true"></i>转换为 PDF
         </button>
       </div>
     </section>
@@ -108,15 +111,14 @@
             class="ph ph-caret-right chev" aria-hidden="true"></i></summary>
         <div class="details-body">
           <p style="margin: 6px 0;">不会。解析与渲染全部在你的浏览器里完成，<b>.ipynb 文件不离开你的电脑</b>。</p>
-          <p style="margin: 6px 0;">「转换为 PDF」默认尝试云端导出（走你自己部署的 Cloudflare Worker），发送的也只是渲染完成的 HTML
-            文本；云端不可用时自动回退为浏览器打印导出，你可以在打印对话框里选「另存为 PDF」。</p>
+          <p style="margin: 6px 0;">「转换为 PDF」由真正的 PDF 引擎生成（无打印对话框）：本地走 <code>npm run pdf-server</code> 启动的无头 Chromium 服务，部署后走你自己的 Cloudflare Worker。两者产出的 PDF 均带<b>侧边栏书签大纲</b>与页脚页码。</p>
         </div>
       </details>
       <details>
         <summary><i class="ph ph-question" aria-hidden="true" style="color: var(--text-3)"></i>导出的 PDF 怎么调纸张和边距？<i
             class="ph ph-caret-right chev" aria-hidden="true"></i></summary>
         <div class="details-body">
-          <p style="margin: 6px 0;">云端导出固定为 Letter 纸张、2cm 边距、页脚页码。使用浏览器打印导出时，在打印对话框里可以自选纸张、边距，并建议勾选「背景图形」以保留代码块灰底。</p>
+          <p style="margin: 6px 0;">两条引擎路径均为 Letter 纸张、2cm 边距、页脚页码（第 X 页 / 共 Y 页），并自动按标题层级生成 PDF 侧边栏书签。无需任何手动配置。</p>
         </div>
       </details>
     </section>
