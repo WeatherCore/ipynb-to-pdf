@@ -10,8 +10,14 @@
 
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
+import katexCss from './katex-print-css';
 import { NotebookDoc, NormCell, stripAnsi } from './notebook';
 import { createMathExtractor } from './katex';
+
+/** 导出文档内嵌的 KaTeX 样式：无头渲染引擎（本地/云端）不经过 Vite，
+ *  必须把公式 CSS 随 HTML 一起带上，否则 PDF 里公式碎裂。
+ *  内容由 scripts/sync-katex-css.mjs 从 katex 包生成。 */
+const KATEX_PRINT_CSS = katexCss;
 
 /** CELL_BREAK 标记：老师做课件时留下的分页意图 */
 const CELL_BREAK_RE = /<!--\s*CELL_BREAK\s*-->/g;
@@ -60,7 +66,9 @@ function renderMarkdown(src: string, attachments?: Map<string, string>): string 
       return uri ? `src="${uri}"` : m;
     });
   }
-  return html;
+  // 课件里的内嵌 HTML（<font>/<center>/<style>…）保留原味，但过白名单净化：
+  // 与 Jupyter 的差异点——Jupyter 可信作者本人，这里还要面对网上来的 notebook
+  return sanitize(html);
 }
 
 /** 代码单元高亮。未知语言退回纯文本。 */
@@ -246,6 +254,7 @@ function addHeadingIds(html: string): { html: string; headings: HeadingRef[] } {
   });
   return { html: out, headings };
 }
+void addHeadingIds; // 保留：与 buildToc 同属待产品决策的目录页方案，勿删实现
 
 /** 由标题清单生成目录 HTML：h3 默认折叠在 details 里，避免长目录淹没人 */
 function buildToc(headings: HeadingRef[]): { html: string; entries: number } {
@@ -270,6 +279,7 @@ function buildToc(headings: HeadingRef[]): { html: string; entries: number } {
     `<div class="page-break"></div>`;
   return { html, entries: headings.length };
 }
+void buildToc; // 保留：目录页方案待产品决策（用户裁决：正文暂不插目录页），勿删实现
 
 /** 导出/云端发送用的完整文档：Jupyter 原味样式 + US Letter 打印参数 */
 export function buildPrintDocument(bodyHtml: string, title: string): string {
@@ -278,6 +288,7 @@ export function buildPrintDocument(bodyHtml: string, title: string): string {
 <head>
 <meta charset="UTF-8">
 <title>${esc(title)}</title>
+<style>${KATEX_PRINT_CSS}</style>
 <style>${PRINT_CSS}</style>
 </head>
 <body>
@@ -291,6 +302,7 @@ export const PAGE_OPTIONS = {
   format: 'letter' as const,
   marginCm: 2,
 };
+void PAGE_OPTIONS; // 导出仅为文档化打印参数（README「配置说明」引用），代码内暂无消费者
 
 export const PRINT_CSS = `
 @page { size: letter; margin: 2cm; }
