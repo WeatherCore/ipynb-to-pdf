@@ -3,6 +3,13 @@
  *
  * 目标：把两种历史格式的差异在入口处抹平，下游渲染器只面对
  * 一种干净的中间表示（NormalizedCell / NormOutput），不必到处写 if (v3)。
+ *
+ * v3 差异清单（均在本文件内抹平，下游无感知）：
+ * - cells 在 worksheets[n].cells 而非顶层
+ * - heading_cell（带 level 字段）→ 归一化成带 # 的 markdown
+ * - 代码源字段叫 input，执行计数叫 prompt_number
+ * - 输出平铺（png/jpeg/svg/latex/text 键）而非 mimebundle
+ * - 输出类型名 pyout / pyerr（v4 为 execute_result / error）
  */
 
 /** 归一化后的输出 */
@@ -164,6 +171,7 @@ function normV3Output(o: Record<string, any>, widgets: WidgetCounter): NormOutpu
       return [{ kind: 'stream', text: stripAnsi(get('text') ?? '') }];
     case 'pyout':
     case 'display_data': {
+      // v3 pyout 的 text/html 键名是 html（不带 text/ 前缀）
       const html = get('html');
       if (html !== undefined) outs.push({ kind: 'html', html });
       const svg = get('svg');
@@ -174,6 +182,7 @@ function normV3Output(o: Record<string, any>, widgets: WidgetCounter): NormOutpu
       }
       const latex = get('latex');
       if (latex !== undefined) outs.push({ kind: 'latex', latex });
+      // v3 的纯文本键是 text（pyout 里作为 text/plain 出现）
       const text = get('text');
       if (text !== undefined && outs.length === 0) outs.push({ kind: 'text', text: stripAnsi(text) });
       return outs;
@@ -201,28 +210,49 @@ export function parseNotebook(jsonText: string): NotebookDoc {
   } catch (e) {
     throw new Error('文件不是合法的 JSON，无法作为 .ipynb 解析。');
   }
-  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.cells)) {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('这看起来不是一个 Jupyter Notebook 文件。');
+  }
+  // nbformat v3（老 Anaconda/ipython 2.x 导出）：cells 藏在 worksheets[n].cells，
+  // 代码字段叫 input/prompt_number，输出平铺（png/jpeg/svg/latex 而非 mimebundle）。
+  // v4 及未知版本：cells 在顶层。三处差异在下方归一化函数里抹平。
+  const nbformat: 3 | 4 = raw.nbformat === 3 ? 3 : 4;
+  let cellList: unknown[] | undefined = raw.cells;
+  if (nbformat === 3 && !Array.isArray(cellList)) {
+    const sheets = Array.isArray(raw.worksheets) ? raw.worksheets : [];
+    cellList = sheets.flatMap((ws: Record<string, any>) =>
+      Array.isArray(ws?.cells) ? ws.cells : [],
+    );
+  }
+  if (!Array.isArray(cellList)) {
     throw new Error('缺少 cells 字段——这看起来不是一个 Jupyter Notebook 文件。');
   }
-  const nbformat: 3 | 4 = raw.nbformat === 3 ? 3 : 4;
   const meta = raw.metadata ?? {};
   const widgets = new WidgetCounter();
 
-  const cells: NormCell[] = raw.cells.map((c: Record<string, any>) => {
-    const type = c.cell_type === 'code' ? 'code' : c.cell_type === 'raw' ? 'raw' : 'markdown';
+  const cells: NormCell[] = (cellList as Record<string, any>[]).map((c) => {
+    // v3 标题单元是 heading_cell；这里统一映射：heading → markdown（层级进 source）
+    const isHeading = c.cell_type === 'heading';
+    const type = c.cell_type === 'code' ? 'code'
+      : c.cell_type === 'raw' ? 'raw'
+      : 'markdown'; // markdown / heading
+    let source = joinSource(c.source);
+    if (isHeading) source = `${'#'.repeat(Math.min(Math.max(Number(c.level) || 1, 1), 6))} ${source}`;
     const cell: NormCell = {
       type,
-      source: joinSource(c.source),
+      source,
       execCount: null,
       outputs: [],
       attachments: normalizeAttachments(c.attachments),
     };
     if (type === 'code') {
+      // v4: execution_count；v3: prompt_number（且源字段是 input）
       cell.execCount = typeof c.execution_count === 'number'
         ? c.execution_count
         : typeof c.prompt_number === 'number'
           ? c.prompt_number
           : null;
+      if (nbformat === 3 && typeof c.input !== 'undefined') cell.source = joinSource(c.input);
       const outputs = Array.isArray(c.outputs) ? c.outputs : [];
       cell.outputs = outputs.flatMap((o: Record<string, any>) =>
         nbformat === 3 ? normV3Output(o, widgets) : normV4Output(o, widgets),
