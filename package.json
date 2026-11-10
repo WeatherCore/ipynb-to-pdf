@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "pdf-server": "tsx server/local-pdf.ts",
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
@@ -16,12 +17,16 @@
     "dompurify": "^3.2.6",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.22",
-    "markdown-it": "^14.1.0"
+    "markdown-it": "^14.1.0",
+    "pdfjs-dist": "^6.5.438",
+    "puppeteer-core": "^25.16.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261107.1",
     "@types/markdown-it": "^14.1.2",
+    "@types/node": "^26.6.6",
     "jsdom": "^31.0.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "vite": "^7.1.0",
     "wrangler": "^4.40.0"
