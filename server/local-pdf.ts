@@ -5,6 +5,11 @@
  *
  * 启动：npm run pdf-server（端口 8787，仅监听 127.0.0.1）
  * 仅本地开发/自用场景；部署到 Cloudflare 后由 Worker 的 Browser Rendering 路径接管。
+ *
+ * 请求校验三件套（防 DNS rebinding 与恶意网页静默调用）：
+ * Origin 白名单 → Host 必须是本机 → Content-Type 必须是 JSON。
+ * 注意：浏览器端「探测后启动 pdf-server」场景由前端 60s TTL 探测覆盖；
+ * 但 pdf-server 的浏览器进程常驻内存，SIGINT 之外没有自动休眠。
  */
 
 import puppeteer, { Browser } from 'puppeteer-core';
@@ -59,18 +64,36 @@ const PDF_OPTS = {
 
 function cors(req: IncomingMessage, res: ServerResponse): boolean {
   const origin = req.headers.origin ?? '';
-  if (ALLOWED_ORIGINS.has(origin)) {
+  // DNS rebinding / 恶意网页加固：仅接受本机来源与 Host，其余一律 403/404
+  if (origin) {
+    if (!ALLOWED_ORIGINS.has(origin)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' })
+        .end(JSON.stringify({ error: 'origin not allowed' }));
+      return false;
+    }
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   }
+  // 无 Origin 的请求（curl / 同源 POST）必须是同源 Host
+  const host = (req.headers.host ?? '').split(':')[0];
+  if (host !== '127.0.0.1' && host !== 'localhost') {
+    res.writeHead(403, { 'Content-Type': 'application/json' })
+      .end(JSON.stringify({ error: 'host not allowed' }));
+    return false;
+  }
   if (req.method === 'OPTIONS') {
-    res.writeHead(origin && !ALLOWED_ORIGINS.has(origin) ? 403 : 204).end();
+    res.writeHead(204).end();
     return false;
   }
   if (req.method !== 'POST' || !req.url?.startsWith('/api/local-pdf')) {
     res.writeHead(404, { 'Content-Type': 'application/json' })
       .end(JSON.stringify({ error: 'POST /api/local-pdf only' }));
+    return false;
+  }
+  if (!/^application\/json\b/i.test(String(req.headers['content-type'] ?? ''))) {
+    res.writeHead(415, { 'Content-Type': 'application/json' })
+      .end(JSON.stringify({ error: 'Content-Type must be application/json' }));
     return false;
   }
   return true;
