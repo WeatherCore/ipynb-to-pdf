@@ -204,12 +204,22 @@ async function convertToPdf(): Promise<void> {
     downloadBlob(blob, filename);
     setStatus('success', '<i class="ph ph-check-circle" aria-hidden="true"></i> PDF 已生成（云端，含侧边栏书签），开始下载。');
   } catch (e) {
-    // 两条引擎路径都不可用：明确报错并给出解决方法（不再回退浏览器打印）
-    setStatus('error',
-      'PDF 引擎不可用（本地服务未启动，且云端不可达）。<br>' +
-      '解决方法：<b>npm run pdf-server</b> 启动本地导出服务后重试；' +
-      '或将本项目部署到 Cloudflare（<b>npm run deploy</b>）。<br>' +
-      `<span style="font-size:.85em">错误详情：${e instanceof Error ? e.message : String(e)}</span>`);
+    const detail = e instanceof Error ? e.message : String(e);
+    // 两条引擎路径都不可用。本地开发给出可操作的解决方法；部署环境只展示友好提示，
+    // 不暴露 npm 命令等内部细节，仅保留一行错误详情便于用户反馈给管理员排查。
+    const isLocalDev = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+    if (isLocalDev) {
+      setStatus('error',
+        'PDF 引擎不可用（本地服务未启动，且云端不可达）。<br>' +
+        '解决方法：<b>npm run pdf-server</b> 启动本地导出服务后重试；' +
+        '或将本项目部署到 Cloudflare（<b>npm run deploy</b>）。<br>' +
+        `<span style="font-size:.85em">错误详情：${detail}</span>`);
+    } else {
+      setStatus('error',
+        'PDF 生成暂时失败，请稍后重试。<br>' +
+        '若多次重试仍失败，请将下面的信息反馈给管理员：<br>' +
+        `<span style="font-size:.85em">错误详情：${detail}</span>`);
+    }
   }
   convertBtn.disabled = false;
   printing = false;
