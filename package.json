@@ -3,13 +3,14 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "鎶?Jupyter Notebook (.ipynb) 杞垚涓枃涓嶄贡鐮佺殑 PDF 鈥斺€?Convert Jupyter notebooks to PDF with full CJK support",
+  "description": "把 Jupyter Notebook (.ipynb) 转成中文不乱码的 PDF —— Convert Jupyter notebooks to PDF with full CJK support",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "pdf-server": "tsx server/local-pdf.ts",
+    "sync-katex-css": "node scripts/sync-katex-css.mjs",
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
@@ -18,11 +19,11 @@
     "highlight.js": "^11.11.1",
     "katex": "^0.16.22",
     "markdown-it": "^14.1.0",
-    "pdfjs-dist": "^6.5.438",
     "puppeteer-core": "^25.16.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261107.1",
+    "@types/jsdom": "^30.0.0",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^26.6.6",
     "jsdom": "^31.0.0",
