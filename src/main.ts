@@ -1,8 +1,6 @@
 /**
- * main.ts — 页面逻辑（v2：全窗口拖放 + 骨架屏 + 示例 + 云端进度细化 + 移动端强化）
- *
- * 唯一转换按钮：先请求 /api/pdf（Worker + Browser Rendering），
- * 失败（无后端/额度尽/网络错误）时自动回退 window.print()，UI 不区分两条路。
+ * main.ts — 页面逻辑（v3）：本地服务 → 云端 Worker 双引擎路由，无打印对话框。
+ * PDF 均带侧边栏书签大纲（outline，h1-h3 生成）+ 页脚页码。
  */
 
 import './style.css';
@@ -42,7 +40,7 @@ interface LoadedDoc {
 }
 
 let loaded: LoadedDoc | null = null;
-let printing = false;       // print 回退防重入
+let printing = false;       // 转换防重入
 let dragDepth = 0;          // 全窗口拖放：子元素进出计数
 
 function show(el: HTMLElement, visible: boolean): void {
@@ -116,8 +114,8 @@ async function loadFile(file: File): Promise<void> {
     fileNameEl.textContent = file.name;
     fileNameEl.title = file.name;
     fileStatsEl.textContent =
-      `${stats.cells} 个单元格 · ${stats.markdown} markdown · ${stats.code} 代码 · ` +
-      `${stats.images} 张图片 · 约 ${estimatePages(html)} 页`;
+      `${stats.cells} 个单元格（${stats.markdown} markdown，${stats.code} 代码），` +
+      `${stats.images} 张图片，约 ${estimatePages(html)} 页`;
     show(previewBar, true);
     if (window.matchMedia('(max-width: 640px)').matches) {
       // 移动端：预览条出现后滚到视口顶部，让用户立刻看到文件名和转换按钮
@@ -144,18 +142,55 @@ function estimatePages(html: string): number {
   return Math.max(1, Math.round(textLen / 4200 + imgCount * 0.45));
 }
 
-/* ---------------- 云端转换（阶段进度）+ 打印兜底 ---------------- */
+/* ---------------- 转换路由：本地服务 → 云端 Worker，无打印对话框 ---------------- */
+
+/** 本地导出服务是否可达（带 1.2s 超时探测，结果缓存） */
+let localProbe: Promise<boolean> | null = null;
+function probeLocal(): Promise<boolean> {
+  if (!localProbe) {
+    localProbe = (async () => {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 1200);
+        const r = await fetch('http://127.0.0.1:8787/api/local-pdf', {
+          method: 'OPTIONS',
+          signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        return r.ok;
+      } catch { return false; }
+    })();
+  }
+  return localProbe;
+}
 
 async function convertToPdf(): Promise<void> {
   if (!loaded || printing) return;
   convertBtn.disabled = true;
   printing = true;
+  const filename = loaded.name.replace(/\.ipynb$/i, '');
+  const doc = buildPrintDocument(loaded.bodyHtml, filename);
   try {
-    setStatus('info', `正在生成 PDF…${renderStages(0)}`);
-    const doc = buildPrintDocument(loaded.bodyHtml, loaded.name.replace(/\.ipynb$/i, ''));
-    const filename = loaded.name.replace(/\.ipynb$/i, '');
+    // ---- 路径 1：本地导出服务（无头 Chromium，带书签 + 页码页脚） ----
+    if (await probeLocal()) {
+      setStatus('info', '正在生成本地 PDF…');
+      const resp = await fetch('http://127.0.0.1:8787/api/local-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: doc }),
+      });
+      if (!resp.ok) throw new Error(`本地服务返回 ${resp.status}`);
+      const blob = await resp.blob();
+      if (blob.type !== 'application/pdf' || blob.size < 100) throw new Error('返回内容不是有效 PDF');
+      downloadBlob(blob, filename);
+      setStatus('success', '<i class="ph ph-check-circle" aria-hidden="true"></i> PDF 已生成（本地引擎，含侧边栏书签），开始下载。');
+      convertBtn.disabled = false;
+      printing = false;
+      return;
+    }
 
-    // 阶段 1 完成 → 阶段 2：发送 HTML
+    // ---- 路径 2：云端 Worker（Browser Rendering，含书签 + 页码页脚） ----
+    setStatus('info', `正在生成 PDF…${renderStages(0)}`);
     setStatus('info', `正在生成 PDF…${renderStages(1)}`);
     const resp = await fetch('/api/pdf', {
       method: 'POST',
@@ -163,33 +198,30 @@ async function convertToPdf(): Promise<void> {
       body: JSON.stringify({ html: doc, filename }),
     });
     if (!resp.ok) throw new Error(`服务端返回 ${resp.status}`);
-
-    // 阶段 3：拿到 PDF 流
     setStatus('info', `正在生成 PDF…${renderStages(2)}`);
     const blob = await resp.blob();
-    if (blob.type !== 'application/pdf' || blob.size < 100) {
-      throw new Error('返回内容不是有效 PDF');
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename + '.pdf';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 30_000);
-    setStatus('success', '<i class="ph ph-check-circle" aria-hidden="true"></i> PDF 已生成并开始下载。');
+    if (blob.type !== 'application/pdf' || blob.size < 100) throw new Error('返回内容不是有效 PDF');
+    downloadBlob(blob, filename);
+    setStatus('success', '<i class="ph ph-check-circle" aria-hidden="true"></i> PDF 已生成（云端，含侧边栏书签），开始下载。');
   } catch (e) {
-    // 回退：浏览器打印 → 另存为 PDF。本机字体，中文永远不乱码。
-    setStatus('info',
-      '云端导出不可用（可能是未部署后端或免费额度用完），已改用<b>浏览器打印</b>导出：' +
-      '在打印对话框中选择「另存为 PDF」，纸张选 Letter、边距默认、勾选「背景图形」即可。');
-    setTimeout(() => {
-      window.print();
-      printing = false;
-    }, 400);
-    return;
+    // 两条引擎路径都不可用：明确报错并给出解决方法（不再回退浏览器打印）
+    setStatus('error',
+      'PDF 引擎不可用（本地服务未启动，且云端不可达）。<br>' +
+      '解决方法：<b>npm run pdf-server</b> 启动本地导出服务后重试；' +
+      '或将本项目部署到 Cloudflare（<b>npm run deploy</b>）。<br>' +
+      `<span style="font-size:.85em">错误详情：${e instanceof Error ? e.message : String(e)}</span>`);
   }
   convertBtn.disabled = false;
   printing = false;
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename + '.pdf';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 /* ---------------- 内置示例 notebook ---------------- */
