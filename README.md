@@ -38,8 +38,8 @@
 | 支柱 | 怎么做到的 | 落点 |
 |---|---|---|
 | 🀄 **中文不乱码** | 渲染在本机浏览器完成，`font-family` 走 PingFang SC / Microsoft YaHei / Noto Sans CJK SC 栈，无字体子集化环节 | `src/render.ts` 的 `PRINT_CSS` |
-| 🎨 **Jupyter 原味** | markdown 内嵌 HTML 直通、`In [n]:` 提示符、经典 CodeMirror 配色、输出区独立列 | `src/render.ts` |
-| 🔒 **隐私优先** | 解析与渲染全在浏览器；云端导出只上传渲染后的 HTML 文本，且走你自己部署的 Worker | `src/main.ts` · `index.html` FAQ |
+| 🎨 **Jupyter 原味** | markdown 内嵌 HTML 直通（经 DOMPurify 白名单净化，经典标签保留、脚本剔除）、`In [n]:` 提示符、经典 CodeMirror 配色、输出区独立列 | `src/render.ts` |
+| 🔒 **隐私优先** | 解析与渲染全在浏览器；云端导出只上传渲染后的 HTML 文本（不传原始笔记本），且走你自己部署的 Worker | `src/main.ts` · `index.html` FAQ |
 | 🛟 **永不卡死** | 双引擎路由：本地服务 → 云端 Worker 自动选择，全程无打印对话框；两路都不可用时给出明确启动指引 | `src/main.ts` 的 `convertToPdf()` |
 
 ## ✨ 功能全景
@@ -53,7 +53,7 @@
 - 🧯 **ANSI 控制序列清洗** — stream 输出只留可读文本（`src/notebook.ts` 的 `stripAnsi`）
 - 🪄 **交互式 widget 自动跳过** — 计数并提示"N 个 widget 无法进入 PDF"，其余内容正常渲染（`src/notebook.ts` 的 `WidgetCounter`）
 - 🖱️ **全窗口拖放 + Ctrl+V 粘贴 + 内置示例** — 任意位置松手即预览，`?example=1` 一键自检（`src/main.ts`）
-- ⚡ **双引擎一键导出，无打印对话框** — 本地服务（`npm run pdf-server`，无头 Chromium）优先，云端 Worker 兜底；PDF 均带侧边栏书签大纲 + 页脚页码（`src/main.ts` · `server/local-pdf.ts` · `worker/index.ts`）
+- ⚡ **双引擎一键导出，无打印对话框** — 本地服务（`npm run pdf-server`，无头 Chromium）优先，云端 Worker 兜底；本地转换失败自动回退云端；PDF 均带侧边栏书签大纲 + 页脚页码（`src/main.ts` · `server/local-pdf.ts` · `worker/index.ts`）
 
 ## 🏗️ 架构总览
 
@@ -117,7 +117,7 @@ sequenceDiagram
 | Markdown | markdown-it 14（`html: true`） | GFM 渲染 + 内嵌 HTML 直通 |
 | 公式 | KaTeX 0.16 | `$…$` / `$$…$$` 排版 |
 | 高亮 | highlight.js 11（common 包） | 代码单元格语法高亮 |
-| 安全 | DOMPurify 3 | 输出区 / 内嵌 HTML 白名单净化 |
+| 安全 | DOMPurify 3 | 输出区 / 内嵌 HTML 白名单净化（markdown 单元同样过净化，脚本/事件属性剔除） |
 | 图标 | @phosphor-icons/web | UI 图标 |
 | 本地导出 | puppeteer-core + tsx | 驱动本机 Edge/Chrome 无头渲染（`npm run pdf-server`） |
 | 云端导出 | Cloudflare Workers + Browser Rendering + Workers Assets | `/api/pdf` 无头渲染 + 静态托管 |
@@ -292,26 +292,27 @@ font-family: -apple-system, "Segoe UI", "Helvetica Neue", "PingFang SC",
 
 ### 2️⃣ 公式为什么不会被 markdown 吃掉
 
-markdown 规则会把 `$E = mc^2$` 里的 `_`、`*` 当成强调语法。`src/katex.ts` 在 markdown-it 之前插入一道管线：
+markdown 规则会把 `$E = mc^2$` 里的 `_`、`*` 当成强调语法。`src/katex.ts` 在 markdown-it 之前插入一道管线（注意顺序：**还原保护段发生在数学抽取之后**，这样围栏代码块里的 `$HOME` 这类文本永远不会被误当公式）：
 
 ```
 原始 markdown
-  → maskProtected()：围栏代码块 / 行内代码 / HTML 注释先保护起来
-  → $$…$$ 与 $…$ 抽成占位符 xmathrulez<idx>xmathrulez
-  → markdown-it 正常渲染（占位符是普通文本，谁也动不了它）
+  → maskProtected()：围栏代码块 / 行内代码 / HTML 注释换成临时占位
+  → 在屏蔽文本上把 $$…$$ 与 $…$ 抽成占位符 xmathrulez<idx>xmathrulez
+  → unmask()：保护段原样放回（围栏里的 $ 原封不动）
+  → markdown-it 正常渲染（公式占位符是普通文本，谁也动不了它）
   → restore()：占位符还原为 KaTeX HTML，失败则显示红色代码兜底
 ```
 
 ### 3️⃣ 内嵌 HTML 怎么做到「原味又安全」
 
-`markdown-it` 开 `html: true` 让课件的 `<font>`/`<center>`/`<style>` 直通（Jupyter 行为）；所有动态内容（输出区 HTML、SVG、公式产物）过一遍 **DOMPurify 白名单**（`src/render.ts` → `sanitize`）：
+`markdown-it` 开 `html: true` 让课件的 `<font>`/`<center>`/`<style>` 直通（Jupyter 行为）；随后**所有**进入文档的动态内容（markdown 单元内的内嵌 HTML、输出区 HTML、SVG、公式产物）过一遍 **DOMPurify 白名单**（`src/render.ts` → `sanitize`）：
 
 - 保留课件常用的 legacy 属性：`align` / `face` / `color` / `bgcolor`…
 - 剔除打印场景无意义且有风险的东西：`script` / `iframe` / `object` / `embed` / `form` 与 `onerror` 类内联事件
 
 ### 4️⃣ 双路导出，永不断头
 
-云端路径把渲染好的完整 HTML POST 到你自己部署的 Worker（`worker/index.ts`），由 Browser Rendering 的 `quickAction("pdf")` 无头渲染成 Letter 纸张 + 2cm 边距 + 中文页码页脚 + **侧边栏书签大纲**（`outline: true`）的 PDF 流式返回。本地路径（`server/local-pdf.ts`）用 puppeteer-core 驱动本机 Edge/Chrome 出同规格 PDF，不吃 CF 额度。任何一环失败，前端给出明确启动指引——**没有打印对话框，没有死胡同**。
+云端路径把渲染好的完整 HTML POST 到你自己部署的 Worker（`worker/index.ts`），由 Browser Rendering 的 `quickAction("pdf")` 无头渲染成 Letter 纸张 + 2cm 边距 + 中文页码页脚 + **侧边栏书签大纲**（`outline: true`）的 PDF 流式返回。本地路径（`server/local-pdf.ts`）用 puppeteer-core 驱动本机 Edge/Chrome 出同规格 PDF，不吃 CF 额度；本地探测通过但转换失败时自动回退云端。导出 HTML 内嵌完整 KaTeX 样式（`src/katex-print-css.ts`，由 `scripts/sync-katex-css.mjs` 生成），无头引擎不经过 Vite 也不会公式碎裂。任何一环失败，前端给出明确启动指引——**没有打印对话框，没有死胡同**。
 
 ## 📁 项目结构
 
@@ -323,10 +324,15 @@ ipynb-to-pdf/
 │   ├── notebook.ts       # .ipynb 解析：nbformat v3/v4 归一化 + ANSI 清洗 + widget 计数
 │   ├── render.ts         # 渲染核心：markdown/KaTeX/高亮/分页 + Jupyter 原味 PRINT_CSS
 │   ├── katex.ts          # 公式「提取-占位-还原」管线，防 markdown 吞公式
+│   ├── katex-print-css.ts # 自动生成：导出 HTML 内嵌的 KaTeX 样式（scripts/ 再生成）
 │   ├── node-render.ts    # 验收专用入口（jsdom 顶替 DOM），不进构建产物
 │   └── vite-env.d.ts     # Vite 类型声明
+├── server/
+│   └── local-pdf.ts      # 本地 PDF 导出服务：puppeteer-core 驱动本机 Edge/Chrome（仅 127.0.0.1）
 ├── worker/
 │   └── index.ts          # Cloudflare Worker：静态资源 ASSETS + POST /api/pdf
+├── scripts/
+│   └── sync-katex-css.mjs # katex 升级后重新生成 src/katex-print-css.ts
 ├── wrangler.json         # Worker 配置：assets + browser 双绑定
 ├── package.json / tsconfig.json
 ├── dist/                 # 构建产物（vite build 生成）
