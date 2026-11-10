@@ -5,7 +5,7 @@
 
 import './style.css';
 import '@phosphor-icons/web/regular/style.css';
-import 'katex/dist/katex.min.css';   // KaTeX 公式排版必需，缺了公式会碎裂
+import 'katex/dist/katex.min.css';   // KaTeX 公式排版必需，缺了公式会碎裂（预览与导出共用渲染产物）
 import { parseNotebook } from './notebook';
 import { renderNotebook, buildPrintDocument, PRINT_CSS } from './render';
 
@@ -144,10 +144,14 @@ function estimatePages(html: string): number {
 
 /* ---------------- 转换路由：本地服务 → 云端 Worker，无打印对话框 ---------------- */
 
-/** 本地导出服务是否可达（带 1.2s 超时探测，结果缓存） */
+/** 本地导出服务是否可达（带 1.2s 超时探测，60s TTL 缓存） */
+const LOCAL_PROBE_TTL_MS = 60_000;
 let localProbe: Promise<boolean> | null = null;
+let localProbeAt = 0;
 function probeLocal(): Promise<boolean> {
-  if (!localProbe) {
+  const now = Date.now();
+  if (!localProbe || now - localProbeAt > LOCAL_PROBE_TTL_MS) {
+    localProbeAt = now;
     localProbe = (async () => {
       try {
         const ctrl = new AbortController();
@@ -174,19 +178,24 @@ async function convertToPdf(): Promise<void> {
     // ---- 路径 1：本地导出服务（无头 Chromium，带书签 + 页码页脚） ----
     if (await probeLocal()) {
       setStatus('info', '正在生成本地 PDF…');
-      const resp = await fetch('http://127.0.0.1:8787/api/local-pdf', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ html: doc }),
-      });
-      if (!resp.ok) throw new Error(`本地服务返回 ${resp.status}`);
-      const blob = await resp.blob();
-      if (blob.type !== 'application/pdf' || blob.size < 100) throw new Error('返回内容不是有效 PDF');
-      downloadBlob(blob, filename);
-      setStatus('success', '<i class="ph ph-check-circle" aria-hidden="true"></i> PDF 已生成（本地引擎，含侧边栏书签），开始下载。');
-      convertBtn.disabled = false;
-      printing = false;
-      return;
+      try {
+        const resp = await fetch('http://127.0.0.1:8787/api/local-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ html: doc }),
+        });
+        if (!resp.ok) throw new Error(`本地服务返回 ${resp.status}`);
+        const blob = await resp.blob();
+        if (blob.type !== 'application/pdf' || blob.size < 100) throw new Error('返回内容不是有效 PDF');
+        downloadBlob(blob, filename);
+        setStatus('success', '<i class="ph ph-check-circle" aria-hidden="true"></i> PDF 已生成（本地引擎，含侧边栏书签），开始下载。');
+        convertBtn.disabled = false;
+        printing = false;
+        return;
+      } catch (localErr) {
+        // 探测通过但转换失败（服务中途崩溃/渲染超时）：回退云端而不是直接报死
+        console.warn('[ipynb-to-pdf] 本地引擎失败，回退云端：', localErr);
+      }
     }
 
     // ---- 路径 2：云端 Worker（Browser Rendering，含书签 + 页码页脚） ----
