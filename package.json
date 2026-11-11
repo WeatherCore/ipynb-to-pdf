@@ -19,6 +19,7 @@
     "highlight.js": "^11.11.1",
     "katex": "^0.16.22",
     "markdown-it": "^14.1.0",
+    "pdfjs-dist": "^6.5.438",
     "puppeteer-core": "^25.16.0"
   },
   "devDependencies": {
