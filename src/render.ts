@@ -87,35 +87,17 @@ function highlightCode(code: string, lang: string): string {
   return esc(code);
 }
 
-/** CELL_BREAK → 分页 div；同时去掉该注释避免原样显示 */
-const PAGE_BREAK_DIV = '\n\n<div class="page-break"></div>\n\n';
-
-/** 纯标题 cell：整个 cell 只含标题（h1-h6），无其他可见内容 */
-function isHeadingOnlyCell(source: string): boolean {
-  const stripped = source
-    .replace(CELL_BREAK_RE, '')      // 分页标记不算内容
-    .replace(/<!--[\s\S]*?-->/g, '') // 其他 HTML 注释不算
-    .replace(/^\s*#{1,6}\s+.*$/gm, '') // ATX 标题行
-    .replace(/<h[1-6][\s\S]*?<\/h[1-6]>/gi, '') // HTML 标题标签
-    .trim();
-  return stripped.length === 0;
-}
-
 /**
- * 智能合并分页：cell 以 CELL_BREAK 开头，而上一 cell 是纯标题时，
- * 分页符会造出「标题独占一页」的孤页（标题后无正文可跟）。
- * 此时降级为普通标题间距。其余 15 处 CELL_BREAK 语义不变。
+ * CELL_BREAK 处理（用户裁决 v11：全部取消，不换页）。
+ * 标记仍被消费（不原样显示），替换为不可见注释；
+ * 段落衔接由 .cell 的 margin 间距自然提供。
+ * 历史方案（标题智能合并/填充率阈值）均被此总开关取代。
  */
-const PAGE_BREAK_SUPPRESSED = '\n\n<!-- page-break suppressed: heading-only predecessor -->\n\n';
+const CELL_BREAK_NEUTRALIZED = '<!-- CELL_BREAK (page break disabled by user) -->';
 
-function injectPageBreaks(src: string, suppress: boolean): { html: string; breaks: number; suppressed: number } {
+function injectPageBreaks(src: string): { html: string; breaks: number } {
   const matches = src.match(CELL_BREAK_RE);
-  const replacement = suppress ? PAGE_BREAK_SUPPRESSED : PAGE_BREAK_DIV;
-  return {
-    html: src.replace(CELL_BREAK_RE, replacement),
-    breaks: matches ? matches.length : 0,
-    suppressed: suppress && matches ? matches.length : 0,
-  };
+  return { html: src.replace(CELL_BREAK_RE, CELL_BREAK_NEUTRALIZED), breaks: matches ? matches.length : 0 };
 }
 
 export interface RenderResult {
@@ -145,34 +127,25 @@ export function renderNotebook(doc: NotebookDoc): RenderResult {
   };
 
   const chunks: string[] = [];
-  /** 上一 cell 是否为纯标题（决定当前 cell 开头的 CELL_BREAK 是否降级） */
-  let prevWasHeadingOnly = false;
 
   for (const cell of doc.cells) {
     if (cell.type === 'markdown') {
       stats.markdown++;
-      const suppress = prevWasHeadingOnly;
-      const injected = injectPageBreaks(cell.source, suppress);
-      stats.pageBreaks += injected.breaks - injected.suppressed;
+      const injected = injectPageBreaks(cell.source);
+      stats.pageBreaks += injected.breaks;
       const seg = renderMarkdown(injected.html, cell.attachments);
-      // CELL_BREAK 在 cell 开头时渲染结果以分页 div 起头；纯空白且无分页的才跳过
-      const stripped = seg.replace(PAGE_BREAK_SUPPRESSED, '').replace(PAGE_BREAK_DIV, '').trim();
-      if (stripped === '' && injected.breaks === 0) continue;
+      if (seg.trim() === '') continue;
       chunks.push(`<div class="cell cell-markdown">${seg}</div>`);
-      prevWasHeadingOnly = isHeadingOnlyCell(cell.source);
       continue;
     }
 
     if (cell.type === 'raw') {
-      // nbconvert 默认行为：raw cell 原样作为 HTML 透传（可能含分页标记）
-      const suppress = prevWasHeadingOnly;
-      const injected = injectPageBreaks(cell.source, suppress);
-      stats.pageBreaks += injected.breaks - injected.suppressed;
+      // nbconvert 默认行为：raw cell 原样作为 HTML 透传
+      const injected = injectPageBreaks(cell.source);
+      stats.pageBreaks += injected.breaks;
       const seg = sanitize(injected.html);
-      const stripped = seg.replace(PAGE_BREAK_SUPPRESSED, '').replace(PAGE_BREAK_DIV, '').trim();
-      if (stripped === '' && injected.breaks === 0) continue;
+      if (seg.trim() === '') continue;
       chunks.push(`<div class="cell cell-raw">${seg}</div>`);
-      prevWasHeadingOnly = isHeadingOnlyCell(cell.source);
       continue;
     }
 
@@ -219,8 +192,6 @@ export function renderNotebook(doc: NotebookDoc): RenderResult {
       (outHtml ? `<div class="code-output">${outHtml}</div>` : ``) +
       `</div>`,
     );
-    // 代码 cell 不是纯标题：其后即使紧跟 CELL_BREAK 也正常分页
-    prevWasHeadingOnly = false;
   }
 
   // 统计外链图数量（验收项 3）+ 书签条数（PDF outline 由 h1-h3 自动生成）
