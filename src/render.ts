@@ -5,7 +5,7 @@
  * 1. 与 Jupyter/nbconvert 原味对齐：markdown 直通 HTML、代码带 In [n] 标签、
  *    输出区独立列、经典 CodeMirror 配色；
  * 2. 一切动态内容在生成后立即 sanitize（DOMPurify），保证字符串拼接安全；
- * 3. 打印友好：CELL_BREAK → page-break，代码块/表格/图片防劈开。
+ * 3. 打印友好：CELL_BREAK 标记只做识别（v1.2 起不再强制换页），图片/公式块防劈开。
  */
 
 import DOMPurify from 'dompurify';
@@ -278,17 +278,24 @@ export const PAGE_OPTIONS = {
 };
 void PAGE_OPTIONS; // 导出仅为文档化打印参数（README「配置说明」引用），代码内暂无消费者
 
+/**
+ * 打印样式。作用域约定（v1.2 起）：正文排版全部挂在 `.notebook-print` 上，
+ * 只有 `body { margin: 0 }` 这类无害归零留在全局——预览会把这份 CSS 注入
+ * 页面的 <head>，若把 font-size/line-height 写在 body 上会连带改掉应用 UI。
+ * 导出文档的正文包在 <article class="notebook-print">，预览容器 #notebook
+ * 同样带这个类，两边共用一套排版。
+ */
 export const PRINT_CSS = `
 @page { size: letter; margin: 2cm; }
 * { box-sizing: border-box; }
 html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-body {
-  margin: 0; color: #222; font-size: 10.5pt; line-height: 1.85;
+body { margin: 0; }
+.notebook-print {
+  padding: 0 4px; color: #222; font-size: 10.5pt; line-height: 1.85;
   font-family: -apple-system, "Segoe UI", "Helvetica Neue", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
   word-wrap: break-word;
 }
-.notebook-print { padding: 0 4px; }
 
 /* ---------- 原味单元格 ---------- */
 .cell { margin: 0 0 10px; }
