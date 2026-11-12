@@ -135,6 +135,7 @@ export function renderNotebook(doc: NotebookDoc): RenderResult {
       stats.pageBreaks += injected.breaks;
       const seg = renderMarkdown(injected.html, cell.attachments);
       if (seg.trim() === '') continue;
+      // 大表格/大围栏块标记（v12）：html 直通后统一由预览测量校准，此处不做行数预判
       chunks.push(`<div class="cell cell-markdown">${seg}</div>`);
       continue;
     }
@@ -185,6 +186,8 @@ export function renderNotebook(doc: NotebookDoc): RenderResult {
       }
     }
 
+    // v13：break-inside 全放开（用户裁决）——块不再整体跳页，前页大留白根除。
+    // 劈开高度无需预判，CSS 层也不再需要 breakable 标记。
     chunks.push(
       `<div class="cell cell-code">` +
       `<div class="code-input"><div class="prompt">${esc(label)}</div>` +
@@ -322,7 +325,7 @@ body {
 /* 表格：原味细线风 */
 .cell-markdown table, .output-html table {
   border-collapse: collapse; margin: .6em 0; max-width: 100%;
-  break-inside: avoid; font-size: .95em;
+  font-size: .95em;  /* v13: 表格不再 avoid，长表按行劈开续排（Chromium 自动重复表头） */
 }
 .cell-markdown th, .cell-markdown td, .output-html th, .output-html td {
   border: 1px solid #d8d8d8; padding: 4px 9px; text-align: left; vertical-align: top;
@@ -392,10 +395,13 @@ body {
 .page-break { break-before: page; page-break-before: always; height: 0; margin: 0; }
 @media print {
   .page-break { break-before: page; }
-  .cell-code .code-holder { break-inside: avoid; }
-  .cell-markdown pre, .cell-markdown table, .cell-markdown img,
-  .output-image, .output-html table { break-inside: avoid; }
+  /* v13（用户裁决）：break-inside 全放开，块不再整体跳页——
+     大留白根除，块在页尾自然劈开续排。仅保留两条必要规则：
+     1. 标题不与后文分离（break-after: avoid）
+     2. 图片/公式块不劈开（图片本就不可分，公式劈开无意义） */
   h1, h2, h3 { break-after: avoid; }
+  .cell-markdown img, .output-image img { break-inside: avoid; }
+  .katex-display { break-inside: avoid; }
 }
 
 /* 页码占位样式已随目录页方案一起移除（用户裁决：正文不插目录页） */
