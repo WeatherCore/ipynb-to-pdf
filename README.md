@@ -33,6 +33,8 @@
 > 它不装 TeX，不装 nbconvert，不上传你的笔记本。
 > 转换不运行任何代码——只渲染笔记本里**已经保存**的输出。
 
+> 🌐 在线试用（维护者自建实例）：<https://ipynb-to-pdf.cc.cd> —— 不装任何东西，拖进去就能转。
+
 ## 🏛️ 设计支柱
 
 | 支柱 | 怎么做到的 | 落点 |
@@ -49,7 +51,7 @@
 - 🧮 **KaTeX 数学公式** — `$…$` 行内与 `$$…$$` 块级，公式先抽成占位符再还原，不会被 markdown 规则吃掉（`src/katex.ts`）
 - 🎨 **代码高亮 + `In [n]:` 提示符** — highlight.js 经典配色，`ipython/sh/console` 等别名自动映射（`src/render.ts` 的 `highlightCode`）
 - 🖼️ **图片全收** — nbformat 附件（`attachment:`）、matplotlib base64 输出、OSS/图床外链全部进 PDF（`src/notebook.ts` 的 `normalizeAttachments`）
-- 📑 **`<!-- CELL_BREAK -->` 自动分页** — 课件里的分页意图变成真正的分页符（`src/render.ts` 的 `injectPageBreaks`）
+- 📑 **分页标记识别与消费** — `<!-- CELL_BREAK -->` 不再原样显示；v1.2 起不再强制换页，长文档按段落自然续排，页尾大留白根除（`src/render.ts` 的 `injectPageBreaks`）
 - 🧯 **ANSI 控制序列清洗** — stream 输出只留可读文本（`src/notebook.ts` 的 `stripAnsi`）
 - 🪄 **交互式 widget 自动跳过** — 计数并提示"N 个 widget 无法进入 PDF"，其余内容正常渲染（`src/notebook.ts` 的 `WidgetCounter`）
 - 🖱️ **全窗口拖放 + Ctrl+V 粘贴 + 内置示例** — 任意位置松手即预览，`?example=1` 一键自检（`src/main.ts`）
@@ -62,7 +64,7 @@ flowchart TB
     subgraph B["🖥️ 你的浏览器 —— 笔记本不出本机"]
         UI["index.html<br/>拖放区 · 骨架屏 · 预览条 · FAQ"] --> MAIN["src/main.ts<br/>交互编排：拖放 · 粘贴 · 示例 · 阶段进度"]
         MAIN --> NB["src/notebook.ts<br/>nbformat v3/v4 归一化 → NormCell"]
-        NB --> RD["src/render.ts<br/>Markdown / KaTeX / 高亮 / 分页 → 打印 HTML"]
+        NB --> RD["src/render.ts<br/>Markdown / KaTeX / 高亮 / 分页标记 → 打印 HTML"]
         KX["src/katex.ts<br/>公式提取-占位-还原"] -.-> RD
         RD --> PV["预览区<br/>scoped PRINT_CSS"]
     end
@@ -189,21 +191,29 @@ npm run deploy         # = vite build + wrangler deploy
 成功时输出形如：
 
 ```text
-Uploaded ipynb-to-pdf (1.2 sec)
-Published ipynb-to-pdf (0.8 sec)
-  https://ipynb-to-pdf.<你的子域>.workers.dev
+Uploaded ipynb (1.2 sec)
+Published ipynb (0.8 sec)
+  https://ipynb.<你的子域>.workers.dev
 ```
 
 **第 4 步 · 验证部署**
 
-1. 打开 `https://ipynb-to-pdf.<你的子域>.workers.dev/?example=1` — 内置示例能正常预览，说明静态资源正常；
+1. 打开 `https://ipynb.<你的子域>.workers.dev/?example=1` — 内置示例能正常预览，说明静态资源正常；
 2. 点 **转换为 PDF** — 状态栏走完「发送 HTML → 浏览器渲染 → 生成 PDF」三阶段并自动下载，说明云端引擎正常；
-3. 打开 Cloudflare 控制台 → **Workers & Pages** → `ipynb-to-pdf`，可查看每次导出的调用记录与日志。
+3. 打开 Cloudflare 控制台 → **Workers & Pages** → `ipynb`，可查看每次导出的调用记录与日志。
+
+**第 5 步 ·（可选）绑定自己的域名**
+
+`*.workers.dev` 在部分网络下不可达，给同学/学生一个稳定好记的地址更靠谱：Cloudflare 控制台 → **Workers & Pages** → `ipynb` → **Settings → Domains & Routes → Add → Custom domain**，填你的域名（该域名的 DNS 需已托管在同一账号），状态变成 Active 即可。
+
+- 自定义域是**独立于部署**的绑定：之后 `npm run deploy` 原地覆盖同名 Worker，绑定不会掉；
+- 维护者的线上实例就是 `https://ipynb-to-pdf.cc.cd`（Workers 名 `ipynb` + 自定义域），可直接对照效果；
+- 不建议把自定义域写进 `wrangler.json` 的 `routes`：别人 fork 后没有这个域名，`npm run deploy` 会直接失败。
 
 **额度与更新**：
 
-- **Browser Rendering 免费额度 = 每天 10 分钟浏览器时长**（UTC 0 点重置）。超限后 `/api/pdf` 返回 `429`，前端给出明确提示而不是静默失败；等次日恢复，急用可临时切本地 `npm run pdf-server`。个人一天转几十份课件都用不完；要更多可升级 Workers Paid（每月含 10 小时）。
-- **以后更新**：改完代码再跑一次 `npm run deploy`，同名 Worker 原地覆盖，网址不变。
+- **Browser Rendering 免费额度 = 每天 10 分钟浏览器时长**（UTC 0 点重置）。超限后 `/api/pdf` 返回 `429`，前端会明确提示「云端浏览器时长已用完，次日自动恢复」，不会静默失败；急用可临时切本地 `npm run pdf-server`。个人一天转几十份课件都用不完；要更多可升级 Workers Paid（每月含 10 小时）。
+- **以后更新**：改完代码再跑一次 `npm run deploy`，同名 Worker 原地覆盖，网址（含自定义域）不变。
 - **回滚**：Cloudflare 控制台该 Worker 的 **Deployments** 里可一键回退旧版本。
 
 <details>
@@ -257,7 +267,7 @@ const CANDIDATES = [
 
 | 配置 | 位置 | 默认值 | 说明 |
 |---|---|---|---|
-| Worker 名称 | `wrangler.json` | `ipynb-to-pdf` | 决定 `*.workers.dev` 子域 |
+| Worker 名称 | `wrangler.json` | `ipynb` | 决定 `*.workers.dev` 子域；自定义域与它解耦 |
 | 静态资源绑定 `ASSETS` | `wrangler.json` | `./dist` | `vite build` 产物目录 |
 | 浏览器绑定 `BROWSER` | `wrangler.json` | BrowserRun | `/api/pdf` 的无头浏览器 |
 | 纸张 / 边距 | `worker/index.ts` 的 `PDF_OPTIONS` 与 `src/render.ts` 的 `PAGE_OPTIONS` | Letter / 2cm | **两处需保持一致**（云端与 @page 对齐） |
@@ -273,8 +283,11 @@ const CANDIDATES = [
   `Get-NetTCPConnection -LocalPort 8787 | Select -Expand OwningProcess | % { Stop-Process -Id $_ -Force }`
   或换端口重启：`$env:PDF_SERVER_PORT=8788; npm run pdf-server`
 - **点了转换没反应/报引擎不可用**：本地服务未启动且云端未部署。先 `npm run pdf-server`，看终端出现 `http://127.0.0.1:8787` 即就绪。
-- **本地 dev 页面报引擎不可用，但我已经部署了 Worker**：部署的 Worker 只服务于它自己的 `*.workers.dev` 域名，本地 `localhost:5173` 页面里的 `/api/pdf` 是相对路径，请求到不了云端。本地使用请启动 `npm run pdf-server`——本地与云端是两条独立的导出引擎。 <!-- CC: 新增 -->
+- **本地服务明明在跑，却报「本地引擎出错 / Connection closed」**：pdf-server 的无头浏览器被关掉或崩了（休眠、系统回收、手动关窗都会）。v1.2 起服务会自动拉起新浏览器，重试一次即可；更早的版本请重启 `npm run pdf-server`。
+- **转换卡住很久**：导出请求现在有超时（本地 180s / 云端 60s），超时会回报「等待超时」并恢复按钮；网络抖动时重试即可。
+- **本地 dev 页面报引擎不可用，但我已经部署了 Worker**：部署的 Worker 只服务于它自己的 `*.workers.dev` 域名（或你绑定的自定义域），本地 `localhost:5173` 页面里的 `/api/pdf` 是相对路径，请求到不了云端。本地使用请启动 `npm run pdf-server`——本地与云端是两条独立的导出引擎。 <!-- CC: 新增 -->
 - **云端转换报 `429 Browser time limit exceeded`**：Browser Rendering 免费档每日 10 分钟浏览器时长已用完（UTC 0 点重置，次日自动恢复）；急用可切本地 `npm run pdf-server`，或升级 Workers Paid。 <!-- CC: 新增 -->
+- **`CELL_BREAK` 不再分页了？**：这是 v1.2 的有意变更——强制换页会在页尾留下大片空白。现在标记只被识别并消费，长文档按内容自然续排。
 - **首次转换慢（10 秒上下）**：45 张 OSS 外链图要真实下载进 PDF，属正常；同一文档第二次转换会命中浏览器缓存。
 
 ## 🔬 核心机制
@@ -322,7 +335,7 @@ ipynb-to-pdf/
 ├── src/
 │   ├── main.ts           # 页面编排：拖放·粘贴·示例·双引擎路由（本地服务→云端）
 │   ├── notebook.ts       # .ipynb 解析：nbformat v3/v4 归一化 + ANSI 清洗 + widget 计数
-│   ├── render.ts         # 渲染核心：markdown/KaTeX/高亮/分页 + Jupyter 原味 PRINT_CSS
+│   ├── render.ts         # 渲染核心：markdown/KaTeX/高亮/分页标记 + Jupyter 原味 PRINT_CSS
 │   ├── katex.ts          # 公式「提取-占位-还原」管线，防 markdown 吞公式
 │   ├── katex-print-css.ts # 自动生成：导出 HTML 内嵌的 KaTeX 样式（scripts/ 再生成）
 │   ├── node-render.ts    # 验收专用入口（jsdom 顶替 DOM），不进构建产物
@@ -345,7 +358,7 @@ ipynb-to-pdf/
 
 - [x] nbformat v3 / v4 双格式支持
 - [x] KaTeX 行内 / 块级公式
-- [x] `<!-- CELL_BREAK -->` 分页标记
+- [x] `<!-- CELL_BREAK -->` 标记识别（v1.2 起不强制分页）
 - [x] 图片三类来源全覆盖（附件 / base64 / 外链）
 - [x] 云端导出 + 本地服务/云端 Worker 双引擎自动兜底 <!-- CC: 修正：v3 已移除浏览器打印兜底 -->
 - [x] 全窗口拖放 / 粘贴 / 内置示例
