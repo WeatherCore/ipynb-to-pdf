@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ipynb 转 PDF</title>
   <meta name="description" content="把 Jupyter Notebook (.ipynb) 转成 PDF：中文不乱码、Markdown 全渲染、图片全保留，文件不离开浏览器。" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%93%3C/text%3E%3C/svg%3E" />
 </head>
 
 <body>
@@ -70,7 +71,7 @@
     <section id="convert-status" class="convert-status" hidden></section>
 
     <section id="preview" class="preview" hidden>
-      <div id="notebook" class="notebook"></div>
+      <div id="notebook" class="notebook notebook-print"></div>
     </section>
 
     <section id="unsupported" class="unsupported" hidden>
@@ -91,7 +92,7 @@
             <li>输出：stream 文本、HTML 表格、matplotlib 图片、错误堆栈</li>
             <li>数学公式：<code>$…$</code> 行内与 <code>$$…$$</code> 块级（KaTeX）</li>
             <li>图片：内嵌附件、base64 图、OSS/图床外链</li>
-            <li><code>&lt;!-- CELL_BREAK --&gt;</code> 标记自动转为分页符</li>
+            <li><code>&lt;!-- CELL_BREAK --&gt;</code> 标记会被识别并消费（v1.2 起不再强制换页，长文档按段落自然续排，避免页尾大留白）</li>
           </ul>
         </div>
       </details>
