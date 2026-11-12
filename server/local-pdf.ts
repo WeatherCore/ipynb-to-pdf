@@ -12,7 +12,7 @@
  * 但 pdf-server 的浏览器进程常驻内存，SIGINT 之外没有自动休眠。
  */
 
-import puppeteer, { Browser } from 'puppeteer-core';
+import puppeteer, { Browser, type Page } from 'puppeteer-core';
 import { existsSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
@@ -36,15 +36,25 @@ const CANDIDATES = [
 let browser: Browser | null = null;
 
 async function getBrowser(): Promise<Browser> {
-  if (browser) return browser;
+  // 浏览器进程可能已退出（崩溃 / 被系统回收 / 用户手动关掉）：缓存不可信，
+  // 断连就关掉旧引用重新拉起，否则本服务会一直 502 直到手动重启。
+  if (browser && browser.connected) return browser;
+  if (browser) {
+    try { await browser.close(); } catch { /* 已经断了，忽略 */ }
+    browser = null;
+  }
   const exe = CANDIDATES.find((p) => existsSync(p));
   if (!exe) throw new Error('未找到 Edge/Chrome，请确认已安装');
-  browser = await puppeteer.launch({
+  const launched = await puppeteer.launch({
     executablePath: exe,
     headless: true,
     args: ['--disable-gpu', '--no-first-run'],
   });
-  return browser;
+  launched.on('disconnected', () => {
+    if (browser === launched) browser = null; // 只清掉自己，避免误伤刚拉起的新实例
+  });
+  browser = launched;
+  return launched;
 }
 
 /** 与 render.ts PRINT_CSS 的 @page 一致：Letter、2cm 边距 */
@@ -117,9 +127,10 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  let page: Page | undefined;
   try {
     const b = await getBrowser();
-    const page = await b.newPage();
+    page = await b.newPage();
     await page.setContent(html, { waitUntil: 'load', timeout: 120_000 });
     // 显式等待网络空闲（新版 puppeteer 推荐用法，替代 networkidle0）
     await page.waitForNetworkIdle({ idleTime: 700, timeout: 60_000 }).catch(() => { /* 超时继续：长文档总有慢图 */ });
@@ -130,7 +141,6 @@ const server = createServer(async (req, res) => {
         .map((img) => new Promise<void>((r) => { img.onload = () => r(); img.onerror = () => r(); })),
     ));
     const pdf = Buffer.from(await page.pdf({ ...PDF_OPTS }));
-    await page.close();
 
     res.writeHead(200, {
       'Content-Type': 'application/pdf',
@@ -139,8 +149,14 @@ const server = createServer(async (req, res) => {
     });
     res.end(pdf);
   } catch (e) {
-    res.writeHead(502, { 'Content-Type': 'application/json' })
-      .end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'application/json' })
+        .end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+    }
+    console.error('[pdf-server] 渲染失败：', e instanceof Error ? e.message : e);
+  } finally {
+    // 失败也要关页，否则反复失败会把浏览器内存堆满
+    if (page) await page.close().catch(() => { /* 页面可能已随浏览器一起消失 */ });
   }
 });
 
